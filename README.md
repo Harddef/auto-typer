@@ -2,6 +2,8 @@
 
 A modern Windows application for automated text input with a sleek dark theme interface.
 
+**[English](README.md)** | [Русский](README.ru.md)
+
 ## Features
 
 - 🎯 **Target Window Selection** - Click-to-select any window for typing
