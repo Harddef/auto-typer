@@ -1,8 +1,24 @@
-# Auto Typer
+# Windows Automation Tools
 
-A modern Windows application for automated text input with a sleek dark theme interface.
+Collection of modern Windows applications for automation tasks.
 
 **[English](README.md)** | [Русский](README.ru.md)
+
+## Projects
+
+### 1. Auto Typer
+A modern Windows application for automated text input with a sleek dark theme interface.
+
+[📖 Documentation](README.md#auto-typer-1) | [📁 Source Code](AutoTyper.csproj)
+
+### 2. Review Generator
+AI-powered review generation tool with OCR support for extracting text from images.
+
+[📖 Documentation](ReviewGenerator/README.md) | [📁 Source Code](ReviewGenerator/)
+
+---
+
+# Auto Typer
 
 ## Features
 
