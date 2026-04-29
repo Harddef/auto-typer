@@ -1,24 +1,8 @@
-# Инструменты автоматизации для Windows
+# Auto Typer
 
-Коллекция современных Windows приложений для задач автоматизации.
-
-[English](README.md) | **[Русский](README.ru.md)**
-
-## Проекты
-
-### 1. Auto Typer
 Современное Windows приложение для автоматического ввода текста с элегантным тёмным интерфейсом.
 
-[📖 Документация](README.ru.md#auto-typer-1) | [📁 Исходный код](AutoTyper.csproj)
-
-### 2. Review Generator
-Инструмент для генерации отзывов с помощью AI и поддержкой OCR для извлечения текста из изображений.
-
-[📖 Документация](ReviewGenerator/README.ru.md) | [📁 Исходный код](ReviewGenerator/)
-
----
-
-# Auto Typer
+[English](README.md) | **[Русский](README.ru.md)**
 
 ## Возможности
 
