@@ -6,15 +6,21 @@ using System.Windows.Forms;
 
 namespace AutoTyper
 {
-    public class WindowSelectorForm : Form
+    /// <summary>
+    /// Window selector with proper resource management and no memory leaks
+    /// </summary>
+    public class WindowSelectorForm : Form, IDisposable
     {
         public IntPtr SelectedWindowHandle { get; private set; }
         public string SelectedWindowTitle { get; private set; } = "";
 
         private Label lblInstruction = null!;
-        private Timer cursorTimer = null!;
+        private Timer? cursorTimer;
         private IntPtr mouseHookHandle = IntPtr.Zero;
-        private LowLevelMouseProc mouseHookCallback;
+        
+        // CRITICAL: Keep delegate as GC-rooted field to prevent collection
+        private readonly LowLevelMouseProc mouseHookCallback;
+        private bool disposed = false;
 
         private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
 
@@ -29,16 +35,39 @@ namespace AutoTyper
         private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr GetModuleHandle(string lpModuleName);
+        private static extern IntPtr GetModuleHandle(string? lpModuleName);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
 
         private const int WH_MOUSE_LL = 14;
         private const int WM_LBUTTONDOWN = 0x0201;
+        private const uint GA_ROOT = 2;
 
         public WindowSelectorForm()
         {
-            InitializeComponent();
+            // Initialize delegate BEFORE setting hook
             mouseHookCallback = HookCallback;
-            mouseHookHandle = SetWindowsHookEx(WH_MOUSE_LL, mouseHookCallback, GetModuleHandle(null), 0);
+            
+            InitializeComponent();
+            
+            // Set hook after UI is ready
+            try
+            {
+                mouseHookHandle = SetWindowsHookEx(WH_MOUSE_LL, mouseHookCallback, GetModuleHandle(null), 0);
+                
+                if (mouseHookHandle == IntPtr.Zero)
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    throw new InvalidOperationException($"Failed to set mouse hook. Error code: {error}");
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to initialize window selector: {ex.Message}", 
+                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                this.DialogResult = DialogResult.Cancel;
+            }
         }
 
         private void InitializeComponent()
@@ -75,62 +104,92 @@ namespace AutoTyper
         {
             if (nCode >= 0 && wParam == (IntPtr)WM_LBUTTONDOWN)
             {
-                NativeMethods.POINT cursorPos;
-                NativeMethods.GetCursorPos(out cursorPos);
-                IntPtr hwnd = NativeMethods.WindowFromPoint(cursorPos);
-
-                // Get the root window (not child controls)
-                IntPtr rootHwnd = GetAncestor(hwnd, 2); // GA_ROOT = 2
-                
-                // Check if it's not this form or the main Auto Typer form
-                if (hwnd != IntPtr.Zero && rootHwnd != this.Handle && rootHwnd != this.Owner?.Handle)
+                try
                 {
-                    StringBuilder sb = new StringBuilder(256);
-                    NativeMethods.GetWindowText(rootHwnd, sb, sb.Capacity);
+                    NativeMethods.POINT cursorPos;
+                    if (!NativeMethods.GetCursorPos(out cursorPos))
+                        return CallNextHookEx(mouseHookHandle, nCode, wParam, lParam);
+
+                    IntPtr hwnd = NativeMethods.WindowFromPoint(cursorPos);
+                    if (hwnd == IntPtr.Zero)
+                        return CallNextHookEx(mouseHookHandle, nCode, wParam, lParam);
+
+                    // Get the root window (not child controls)
+                    IntPtr rootHwnd = GetAncestor(hwnd, GA_ROOT);
                     
-                    // Don't select Auto Typer window
-                    string title = sb.ToString();
-                    if (title != "Auto Typer" && title != "Window Selector - Click on target window")
+                    // Validate handles
+                    if (rootHwnd == IntPtr.Zero)
+                        rootHwnd = hwnd;
+
+                    // Check if it's not this form or the main Auto Typer form
+                    if (rootHwnd != this.Handle && rootHwnd != this.Owner?.Handle)
                     {
-                        SelectedWindowHandle = rootHwnd;
-                        SelectedWindowTitle = title;
-
-                        if (string.IsNullOrEmpty(SelectedWindowTitle))
+                        StringBuilder sb = new StringBuilder(256);
+                        int length = NativeMethods.GetWindowText(rootHwnd, sb, sb.Capacity);
+                        
+                        if (length > 0)
                         {
-                            SelectedWindowTitle = $"Window Handle: {rootHwnd}";
+                            string title = sb.ToString();
+                            
+                            // Don't select Auto Typer windows
+                            if (!title.Contains("Auto Typer") && !title.Contains("Window Selector"))
+                            {
+                                SelectedWindowHandle = rootHwnd;
+                                SelectedWindowTitle = title;
+
+                                // Use BeginInvoke to avoid cross-thread issues
+                                this.BeginInvoke(new Action(() =>
+                                {
+                                    try
+                                    {
+                                        if (cursorTimer != null)
+                                        {
+                                            cursorTimer.Stop();
+                                            cursorTimer.Dispose();
+                                            cursorTimer = null;
+                                        }
+                                        
+                                        this.DialogResult = DialogResult.OK;
+                                        this.Close();
+                                    }
+                                    catch (ObjectDisposedException)
+                                    {
+                                        // Form already disposed, ignore
+                                    }
+                                }));
+
+                                return (IntPtr)1; // Block the click
+                            }
                         }
-
-                        this.Invoke(new Action(() =>
-                        {
-                            cursorTimer.Stop();
-                            this.DialogResult = DialogResult.OK;
-                            this.Close();
-                        }));
-
-                        return (IntPtr)1; // Block the click
                     }
                 }
+                catch (Exception)
+                {
+                    // Silently handle errors in hook to prevent crashes
+                }
             }
+            
             return CallNextHookEx(mouseHookHandle, nCode, wParam, lParam);
         }
 
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
-
         private void CursorTimer_Tick(object? sender, EventArgs e)
         {
-            NativeMethods.POINT cursorPos;
-            NativeMethods.GetCursorPos(out cursorPos);
-            IntPtr hwnd = NativeMethods.WindowFromPoint(cursorPos);
-
-            if (hwnd != IntPtr.Zero)
+            try
             {
-                StringBuilder sb = new StringBuilder(256);
-                NativeMethods.GetWindowText(hwnd, sb, sb.Capacity);
-                string title = sb.ToString();
+                NativeMethods.POINT cursorPos;
+                if (!NativeMethods.GetCursorPos(out cursorPos))
+                    return;
 
-                if (!string.IsNullOrEmpty(title))
+                IntPtr hwnd = NativeMethods.WindowFromPoint(cursorPos);
+                if (hwnd == IntPtr.Zero)
+                    return;
+
+                StringBuilder sb = new StringBuilder(256);
+                int length = NativeMethods.GetWindowText(hwnd, sb, sb.Capacity);
+
+                if (length > 0)
                 {
+                    string title = sb.ToString();
                     lblInstruction.Text = $"Window under cursor:\n\"{title}\"\n\nClick LEFT mouse button | ESC to cancel";
                     lblInstruction.BackColor = Color.LightGreen;
                 }
@@ -140,13 +199,16 @@ namespace AutoTyper
                     lblInstruction.BackColor = Color.White;
                 }
             }
+            catch (Exception)
+            {
+                // Silently handle errors to prevent crashes
+            }
         }
 
         private void WindowSelectorForm_KeyDown(object? sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Escape)
             {
-                cursorTimer.Stop();
                 this.DialogResult = DialogResult.Cancel;
                 this.Close();
             }
@@ -154,16 +216,45 @@ namespace AutoTyper
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (mouseHookHandle != IntPtr.Zero)
-            {
-                UnhookWindowsHookEx(mouseHookHandle);
-            }
+            CleanupResources();
+            base.OnFormClosing(e);
+        }
+
+        private void CleanupResources()
+        {
+            // Stop timer first
             if (cursorTimer != null)
             {
                 cursorTimer.Stop();
                 cursorTimer.Dispose();
+                cursorTimer = null;
             }
-            base.OnFormClosing(e);
+
+            // Unhook mouse hook
+            if (mouseHookHandle != IntPtr.Zero)
+            {
+                UnhookWindowsHookEx(mouseHookHandle);
+                mouseHookHandle = IntPtr.Zero;
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (!disposed)
+            {
+                if (disposing)
+                {
+                    CleanupResources();
+                }
+                disposed = true;
+            }
+            base.Dispose(disposing);
+        }
+
+        // Finalizer as safety net
+        ~WindowSelectorForm()
+        {
+            Dispose(false);
         }
     }
 }
